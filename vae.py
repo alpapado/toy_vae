@@ -1,6 +1,7 @@
 import tensorflow as tf
 from keras.layers import Dense
 
+
 class VAE:
     def __init__(self, latent_size=2, input_size=784, hidden_units=512):
         self.latent_size = latent_size
@@ -10,49 +11,52 @@ class VAE:
 
     def build_model(self):
         x = tf.placeholder(tf.float32, shape=[None, self.input_size])
-        eps = tf.placeholder(tf.float32, shape=[None, self.latent_size])
+        eps = tf.random_normal(shape=(tf.shape(x)[0], 1) )
 
         # Encoder
         with tf.name_scope("encoder"):
             h = Dense(units=self.hidden_units, activation='relu')(x)
-            mu = Dense(units=self.latent_size, activation='linear')(h)
-            log_sigma_squared = Dense(units=self.latent_size, activation='linear')(h)
-            sigma = tf.exp(1/2 * log_sigma_squared)
-            z = mu + tf.multiply(sigma, eps)
+            z_mu = Dense(units=self.latent_size, activation='linear')(h)
+            z_log_sigma_squared = Dense(
+                units=self.latent_size, activation='linear')(h)
+            z_sigma = tf.exp(1 / 2 * z_log_sigma_squared)
+            z = z_mu + tf.multiply(z_sigma, eps)
 
         # Decoder
         with tf.name_scope("decoder"):
             h2 = Dense(units=self.hidden_units, activation='relu')(z)
-            x_hat = Dense(units=self.input_size, activation='linear')(h2)
+            x_mu = Dense(units=self.input_size, activation='linear')(h2)
+            x_log_sigma_squared = Dense(
+                units=self.input_size, activation='linear')(h2)
+            x_hat = x_mu
 
         with tf.name_scope("loss"):
-            kl_divergence = -0.5 * tf.reduce_sum( 1 + log_sigma_squared - tf.pow(mu, 2) - tf.exp(log_sigma_squared), axis=1 )
-            #reconstruction_error = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(logits=x_hat, labels=x), axis=1)
-            reconstruction_error = tf.losses.mean_squared_error(labels=x, predictions=x_hat)
-            #weight_decay = tf.add_n([tf.nn.l2_loss(v) for v in tf.trainable_variables() if 'bias' not in v.name and 'decoder' in v.name]) * 0.001
+            kl_divergence = -0.5 * \
+                tf.reduce_sum(1 + z_log_sigma_squared -
+                              tf.square(z_mu) - tf.exp(z_log_sigma_squared), axis=1)
+            reconstruction_error = tf.reduce_sum(
+                0.5 * (x_log_sigma_squared + tf.square(x - x_mu) / tf.exp(x_log_sigma_squared) ), axis=1)
+
+            #reconstruction_error = tf.losses.mean_squared_error(labels=x, predictions=x_hat)
 
             J = tf.reduce_mean(kl_divergence + reconstruction_error)
-            tf.summary.scalar("Total loss", tf.reduce_mean(J))
-            tf.summary.scalar("KL divergence", tf.reduce_mean(kl_divergence))
-            tf.summary.scalar("Reconstruction error", tf.reduce_mean(reconstruction_error))
+            tf.summary.scalar("Total_loss", tf.reduce_mean(J))
+            tf.summary.scalar("KL_divergence", tf.reduce_mean(kl_divergence))
+            tf.summary.scalar("Reconstruction_error",
+                              tf.reduce_mean(reconstruction_error))
             train_step = tf.train.AdamOptimizer().minimize(J)
-
-        #with tf.name_scope("x_hat_image"):
-        #    x_hat_image = tf.reshape(tf.nn.sigmoid(x_hat), shape=[-1, 28, 28, 1])
-        #    tf.summary.image("x_hat_image", x_hat_image)
-
-        #with tf.name_scope("x_image"):
-        #    x_image = tf.reshape(x, shape=[-1, 28, 28, 1])
-        #    tf.summary.image("x_image", x_image)
+            #train_step = tf.train.RMSPropOptimizer().minimize(J)
 
         # Expose some variables
         self.x = x
         self.z = z
-        self.z_mean = mu
-        self.z_sigma = sigma
+        self.z_mean = z_mu
+        self.z_sigma = z_sigma
         self.eps = eps
         self.train_step = train_step
         self.step_summary = tf.summary.merge_all()
-        self.x_hat = x_hat
+        self.x_hat = x_mu #+ tf.exp(1/2*x_log_sigma_squared)
         self.generate_sample = x_hat
 
+        self.grad_x_z = tf.gradients(self.x_hat, self.z)
+        self.grad_z_x = tf.gradients(self.z, self.x)
